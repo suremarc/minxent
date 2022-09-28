@@ -10,7 +10,7 @@ impl ipopt::BasicProblem for HS071 {
 
     fn bounds(&self, x_l: &mut [ipopt::Number], x_u: &mut [ipopt::Number]) -> bool {
         x_l.fill(1.0);
-        x_u.fill(1.0);
+        x_u.fill(5.0);
         true
     }
 
@@ -132,7 +132,7 @@ impl ipopt::ConstrainedProblem for HS071 {
 }
 
 pub fn main() -> Result<(), Box<dyn Error>> {
-    let mut problem = ipopt::Ipopt::new_unconstrained(HS071 {})?;
+    let mut problem = ipopt::Ipopt::new(HS071 {})?;
     problem.set_option("tol", 3.82e-6);
     problem.set_option("print_level", 5);
     problem.set_option("mu_strategy", "adaptive");
@@ -141,6 +141,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let solve_result = problem.solve();
 
     assert_eq!(solve_result.status, ipopt::SolveStatus::SolveSucceeded);
+    println!("{:?}", &solve_result.solver_data.solution.primal_variables);
 
     Ok(())
 }
