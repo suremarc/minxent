@@ -159,12 +159,13 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let t0 = std::time::Instant::now();
     println!(
         "{}",
-        e.integral_unnormalized(
+        e.integral(
             |x| if (0.0..1.).contains(&x) {
                 SVector::from([1., x])
             } else {
                 SVector::from([0., 0.])
             },
+            100_000,
             &mut rng
         )
     );
