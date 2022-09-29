@@ -1,75 +1,38 @@
 use std::ops::{Div, Mul};
 
-use nalgebra::{ClosedAdd, ClosedMul, SVector};
-use num_traits::Float;
-use rand::{distributions::Standard, prelude::Distribution, Rng};
+use nalgebra::SVector;
+use rand::{prelude::Distribution, rngs::ThreadRng, thread_rng, Rng};
 
 #[derive(Clone)]
-pub struct Exponential<
-    Scalar: Float + nalgebra::Scalar + ClosedAdd + ClosedMul + std::iter::Sum,
+pub struct Exponential<Point, Stat, Prior: Distribution<Point>, const N: usize>
+where
     Point: Copy + Clone,
-    Stat,
-    Prior: Distribution<Point>,
-    const N: usize,
-> where
-    Standard: Distribution<Scalar>,
-    Stat: Clone + Fn(Point) -> SVector<Scalar, N>,
+    Stat: Fn(Point) -> SVector<f64, N>,
     Prior: Clone,
 {
-    multipliers: SVector<Scalar, N>,
+    multipliers: SVector<f64, N>,
     stat: Stat,
     prior: Prior,
-    denom: Scalar,
     _marker: std::marker::PhantomData<Point>,
 }
 
-impl<
-        Scalar: Float + nalgebra::Scalar + ClosedAdd + ClosedMul + std::iter::Sum,
-        Point: Copy + Clone,
-        Stat,
-        Prior: Distribution<Point>,
-        const N: usize,
-    > Exponential<Scalar, Point, Stat, Prior, N>
+impl<Point, Stat, Prior: Distribution<Point>, const N: usize> Exponential<Point, Stat, Prior, N>
 where
-    Standard: Distribution<Scalar>,
-    Stat: Clone + Fn(Point) -> SVector<Scalar, N>,
+    Point: Copy + Clone,
+    Stat: Fn(Point) -> SVector<f64, N>,
     Prior: Clone,
 {
-    pub fn new(multipliers: SVector<Scalar, N>, stat: Stat, prior: Prior) -> Self {
-        let mut new = Self {
+    pub fn new(multipliers: SVector<f64, N>, stat: Stat, prior: Prior) -> Self {
+        Self {
             multipliers,
             stat,
             prior,
-            denom: Scalar::zero(),
             _marker: std::marker::PhantomData,
-        };
-        let mut rng = rand::thread_rng();
-        new.denom = new.integral_unnormalized(|_| Scalar::one(), 1_000_000, &mut rng);
-        new
+        }
     }
-    pub fn density_unnormalized(&self, x: Point) -> Scalar {
+
+    pub fn density(&self, x: Point) -> f64 {
         (self.multipliers.dot(&(self.stat)(x))).exp()
-    }
-
-    pub fn integral_unnormalized<R: Rng, O: std::iter::Sum>(
-        &self,
-        f: impl Fn(Point) -> O,
-        iterations: usize,
-        rng: &mut R,
-    ) -> O
-    where
-        O: Mul<Scalar, Output = O>,
-    {
-        self.prior
-            .clone()
-            .map(|x| f(x) * self.density_unnormalized(x))
-            .sample_iter(rng)
-            .take(iterations)
-            .sum()
-    }
-
-    pub fn density(&self, x: Point) -> Scalar {
-        self.density_unnormalized(x) / self.denom
     }
 
     pub fn integral<R: Rng, O: std::iter::Sum>(
@@ -79,14 +42,120 @@ where
         rng: &mut R,
     ) -> O
     where
-        O: Mul<Scalar, Output = O> + Div<Scalar, Output = O>,
+        O: Mul<f64, Output = O> + Div<f64, Output = O>,
     {
         self.prior
             .clone()
-            .map(|x| f(x) * self.density_unnormalized(x))
+            .map(|x| f(x) * self.density(x))
             .sample_iter(rng)
             .take(iterations)
             .sum::<O>()
-            / self.denom
+            / iterations as f64
+    }
+
+    pub fn entropy<R: Rng>(&self, iterations: usize, rng: &mut R) -> f64 {
+        self.integral(|x| self.multipliers.dot(&(self.stat)(x)), iterations, rng)
+    }
+}
+
+struct Problem<'a, Point, Stat, Prior: Distribution<Point>, const N: usize>
+where
+    Point: Copy + Clone,
+    Stat: Fn(Point) -> SVector<f64, N>,
+    Prior: Clone,
+{
+    exp: &'a Exponential<Point, Stat, Prior, N>,
+}
+
+impl<'a, Point, Stat, Prior: Distribution<Point>, const N: usize> ipopt::BasicProblem
+    for Problem<'a, Point, Stat, Prior, N>
+where
+    Point: Copy + Clone,
+    Stat: Fn(Point) -> SVector<f64, N>,
+    Prior: Clone,
+{
+    fn num_variables(&self) -> usize {
+        N + 1
+    }
+
+    fn bounds(&self, x_l: &mut [ipopt::Number], x_u: &mut [ipopt::Number]) -> bool {
+        false
+    }
+
+    fn initial_point(&self, x: &mut [ipopt::Number]) -> bool {
+        false
+    }
+
+    fn objective(&self, x: &[ipopt::Number], obj: &mut ipopt::Number) -> bool {
+        *obj = self.exp.entropy(10_000, &mut thread_rng());
+        true
+    }
+
+    fn objective_grad(&self, x: &[ipopt::Number], grad_f: &mut [ipopt::Number]) -> bool {
+        grad_f.copy_from_slice(
+            self.exp
+                .integral(
+                    |x| (1. + self.exp.multipliers.dot(&(self.exp.stat)(x))) * (self.exp.stat)(x),
+                    10_000,
+                    &mut thread_rng(),
+                )
+                .as_slice(),
+        );
+
+        true
+    }
+}
+
+impl<'a, Point, Stat, Prior: Distribution<Point>, const N: usize> ipopt::ConstrainedProblem
+    for Problem<'a, Point, Stat, Prior, N>
+where
+    Point: Copy + Clone,
+    Stat: Fn(Point) -> SVector<f64, N>,
+    Prior: Clone,
+{
+    fn num_constraints(&self) -> usize {
+        todo!()
+    }
+
+    fn num_constraint_jacobian_non_zeros(&self) -> usize {
+        todo!()
+    }
+
+    fn constraint(&self, x: &[ipopt::Number], g: &mut [ipopt::Number]) -> bool {
+        todo!()
+    }
+
+    fn constraint_bounds(&self, g_l: &mut [ipopt::Number], g_u: &mut [ipopt::Number]) -> bool {
+        todo!()
+    }
+
+    fn constraint_jacobian_indices(
+        &self,
+        rows: &mut [ipopt::Index],
+        cols: &mut [ipopt::Index],
+    ) -> bool {
+        todo!()
+    }
+
+    fn constraint_jacobian_values(&self, x: &[ipopt::Number], vals: &mut [ipopt::Number]) -> bool {
+        todo!()
+    }
+
+    fn num_hessian_non_zeros(&self) -> usize {
+        todo!()
+    }
+
+    fn hessian_indices(&self, rows: &mut [ipopt::Index], cols: &mut [ipopt::Index]) -> bool {
+        todo!()
+    }
+
+    fn hessian_values(
+        &self,
+        x: &[ipopt::Number],
+        obj_factor: ipopt::Number,
+        lambda: &[ipopt::Number],
+        vals: &mut [ipopt::Number],
+    ) -> bool {
+        todo!()
     }
 }

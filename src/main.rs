@@ -165,7 +165,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 SVector::from([0., 0.])
             },
-            100_000,
+            10_000,
             &mut rng
         )
     );
