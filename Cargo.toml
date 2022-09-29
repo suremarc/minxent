@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 ipopt = "0.5.4"
+rand = "0.8.5"
+nalgebra = "0.31.1"
+num-traits = "0.2.15"

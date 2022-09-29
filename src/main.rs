@@ -1,3 +1,6 @@
+use minxent::Exponential;
+use nalgebra::SVector;
+use rand::{distributions::Standard, rngs::ThreadRng};
 use std::error::Error;
 
 #[derive(Default)]
@@ -142,6 +145,30 @@ pub fn main() -> Result<(), Box<dyn Error>> {
 
     assert_eq!(solve_result.status, ipopt::SolveStatus::SolveSucceeded);
     println!("{:?}", &solve_result.solver_data.solution.primal_variables);
+
+    // test Exponential
+
+    let e = Exponential::new(
+        SVector::from([1., 2.]),
+        |x| SVector::from([x, x * x]),
+        Standard,
+    );
+
+    let mut rng = ThreadRng::default();
+
+    let t0 = std::time::Instant::now();
+    println!(
+        "{}",
+        e.integral_unnormalized(
+            |x| if (0.0..1.).contains(&x) {
+                SVector::from([1., x])
+            } else {
+                SVector::from([0., 0.])
+            },
+            &mut rng
+        )
+    );
+    println!("{}", t0.elapsed().as_micros());
 
     Ok(())
 }
