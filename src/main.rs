@@ -1,6 +1,6 @@
-use minxent::Exponential;
+use minxent::{Exponential, Standard};
 use nalgebra::SVector;
-use rand::{distributions::Standard, rngs::ThreadRng};
+use rand::rngs::ThreadRng;
 use std::error::Error;
 
 #[derive(Default)]
@@ -148,10 +148,10 @@ pub fn main() -> Result<(), Box<dyn Error>> {
 
     // test Exponential
 
-    let e = Exponential::new(
+    let e: Exponential<_, Standard<f64>, 2> = Exponential::new(
         SVector::from([1., 2.]),
         |x| SVector::from([x, x * x]),
-        Standard,
+        Default::default(),
     );
 
     let mut rng = ThreadRng::default();

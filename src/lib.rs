@@ -5,46 +5,71 @@ use std::ops::{Div, Mul};
 use nalgebra::{SMatrix, SVector};
 use rand::{prelude::Distribution, thread_rng, Rng};
 
-#[derive(Clone)]
-pub struct Exponential<Point, Stat, Prior: Distribution<Point>, const N: usize>
+pub trait SampleSpace: Distribution<Self::Point> {
+    type Point: Copy + Clone;
+}
+
+impl<'a, S: SampleSpace> SampleSpace for &'a S {
+    type Point = S::Point;
+}
+
+#[derive(Default)]
+pub struct Standard<T: Copy + Clone>(std::marker::PhantomData<T>)
 where
-    Point: Copy + Clone,
-    Stat: Fn(Point) -> SVector<f64, N>,
+    rand::distributions::Standard: Distribution<T>;
+
+impl<T: Copy + Clone> Distribution<T> for Standard<T>
+where
+    rand::distributions::Standard: Distribution<T>,
+{
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> T {
+        rand::distributions::Standard.sample(rng)
+    }
+}
+
+impl<T: Copy + Clone> SampleSpace for Standard<T>
+where
+    rand::distributions::Standard: Distribution<T>,
+{
+    type Point = T;
+}
+
+#[derive(Clone)]
+pub struct Exponential<Stat, Space: SampleSpace, const N: usize>
+where
+    Stat: Fn(Space::Point) -> SVector<f64, N>,
 {
     multipliers: SVector<f64, N>,
     stat: Stat,
-    prior: Prior,
-    _marker: std::marker::PhantomData<Point>,
+    space: Space,
 }
 
-impl<Point, Stat, Prior: Distribution<Point>, const N: usize> Exponential<Point, Stat, Prior, N>
+impl<Stat, Space: SampleSpace, const N: usize> Exponential<Stat, Space, N>
 where
-    Point: Copy + Clone,
-    Stat: Fn(Point) -> SVector<f64, N>,
+    Stat: Fn(Space::Point) -> SVector<f64, N>,
 {
-    pub fn new(multipliers: SVector<f64, N>, stat: Stat, prior: Prior) -> Self {
+    pub fn new(multipliers: SVector<f64, N>, stat: Stat, space: Space) -> Self {
         Self {
             multipliers,
             stat,
-            prior,
-            _marker: std::marker::PhantomData,
+            space,
         }
     }
 
-    pub fn density(&self, x: Point) -> f64 {
+    pub fn density(&self, x: Space::Point) -> f64 {
         (self.multipliers.dot(&(self.stat)(x))).exp()
     }
 
     pub fn integral<R: Rng, O: std::iter::Sum>(
         &self,
-        f: impl Fn(Point) -> O,
+        f: impl Fn(Space::Point) -> O,
         iterations: usize,
         rng: &mut R,
     ) -> O
     where
         O: Mul<f64, Output = O> + Div<f64, Output = O>,
     {
-        (&self.prior)
+        (&self.space)
             .map(|x| f(x) * self.density(x))
             .sample_iter(rng)
             .take(iterations)
@@ -76,25 +101,22 @@ where
     }
 }
 
-struct Problem<Point, Stat, Prior: Distribution<Point>, const N: usize>
+struct Problem<Stat, Space: SampleSpace, const N: usize>
 where
-    Point: Copy + Clone,
-    Stat: Fn(Point) -> SVector<f64, N>,
+    Stat: Fn(Space::Point) -> SVector<f64, N>,
 {
     stat: Stat,
-    prior: Prior,
+    space: Space,
     g_l: SVector<f64, N>,
     g_u: SVector<f64, N>,
-    _marker: std::marker::PhantomData<Point>,
 }
 
-impl<Point, Stat, Prior: Distribution<Point>, const N: usize> Problem<Point, Stat, Prior, N>
+impl<Stat, Space: SampleSpace, const N: usize> Problem<Stat, Space, N>
 where
-    Point: Copy + Clone,
-    Stat: Fn(Point) -> SVector<f64, N>,
+    Stat: Fn(Space::Point) -> SVector<f64, N>,
     [(); N + 1]:,
 {
-    fn stat_p1(&self) -> impl Fn(Point) -> SVector<f64, { N + 1 }> + '_ {
+    fn stat_p1(&self) -> impl Fn(Space::Point) -> SVector<f64, { N + 1 }> + '_ {
         |x| {
             let stat = (self.stat)(x);
             let mut new: SVector<f64, { N + 1 }> = SVector::zeros();
@@ -105,11 +127,9 @@ where
     }
 }
 
-impl<Point, Stat, Prior: Distribution<Point>, const N: usize> ipopt::BasicProblem
-    for Problem<Point, Stat, Prior, N>
+impl<Stat, Space: SampleSpace, const N: usize> ipopt::BasicProblem for Problem<Stat, Space, N>
 where
-    Point: Copy + Clone,
-    Stat: Fn(Point) -> SVector<f64, N>,
+    Stat: Fn(Space::Point) -> SVector<f64, N>,
     [(); N + 1]:,
 {
     fn num_variables(&self) -> usize {
@@ -132,7 +152,7 @@ where
     fn objective(&self, x: &[ipopt::Number], obj: &mut ipopt::Number) -> bool {
         let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
         multipliers.copy_from_slice(x);
-        let exp = Exponential::new(multipliers, self.stat_p1(), &self.prior);
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.space);
 
         *obj = exp.entropy(10_000, &mut thread_rng());
         true
@@ -141,18 +161,16 @@ where
     fn objective_grad(&self, x: &[ipopt::Number], grad_f: &mut [ipopt::Number]) -> bool {
         let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
         multipliers.copy_from_slice(x);
-        let exp = Exponential::new(multipliers, self.stat_p1(), &self.prior);
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.space);
 
         grad_f.copy_from_slice(exp.entropy_gradient(10_000, &mut thread_rng()).as_slice());
         true
     }
 }
 
-impl<Point, Stat, Prior: Distribution<Point>, const N: usize> ipopt::ConstrainedProblem
-    for Problem<Point, Stat, Prior, N>
+impl<Stat, Space: SampleSpace, const N: usize> ipopt::ConstrainedProblem for Problem<Stat, Space, N>
 where
-    Point: Copy + Clone,
-    Stat: Fn(Point) -> SVector<f64, N>,
+    Stat: Fn(Space::Point) -> SVector<f64, N>,
     [(); N + 1]:,
 {
     fn num_constraints(&self) -> usize {
@@ -166,7 +184,7 @@ where
     fn constraint(&self, x: &[ipopt::Number], g: &mut [ipopt::Number]) -> bool {
         let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
         multipliers.copy_from_slice(x);
-        let exp = Exponential::new(multipliers, self.stat_p1(), &self.prior);
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.space);
 
         g.copy_from_slice(
             exp.integral(&self.stat, 10_000, &mut thread_rng())
