@@ -10,7 +10,6 @@ pub struct Exponential<Point, Stat, Prior: Distribution<Point>, const N: usize>
 where
     Point: Copy + Clone,
     Stat: Fn(Point) -> SVector<f64, N>,
-    Prior: Clone,
 {
     multipliers: SVector<f64, N>,
     stat: Stat,
@@ -22,7 +21,6 @@ impl<Point, Stat, Prior: Distribution<Point>, const N: usize> Exponential<Point,
 where
     Point: Copy + Clone,
     Stat: Fn(Point) -> SVector<f64, N>,
-    Prior: Clone,
 {
     pub fn new(multipliers: SVector<f64, N>, stat: Stat, prior: Prior) -> Self {
         Self {
@@ -46,8 +44,7 @@ where
     where
         O: Mul<f64, Output = O> + Div<f64, Output = O>,
     {
-        self.prior
-            .clone()
+        (&self.prior)
             .map(|x| f(x) * self.density(x))
             .sample_iter(rng)
             .take(iterations)
@@ -83,12 +80,11 @@ struct Problem<Point, Stat, Prior: Distribution<Point>, const N: usize>
 where
     Point: Copy + Clone,
     Stat: Fn(Point) -> SVector<f64, N>,
-    Prior: Clone,
 {
     stat: Stat,
     prior: Prior,
-    _t_l: SVector<f64, N>,
-    _t_u: SVector<f64, N>,
+    g_l: SVector<f64, N>,
+    g_u: SVector<f64, N>,
     _marker: std::marker::PhantomData<Point>,
 }
 
@@ -96,7 +92,6 @@ impl<Point, Stat, Prior: Distribution<Point>, const N: usize> Problem<Point, Sta
 where
     Point: Copy + Clone,
     Stat: Fn(Point) -> SVector<f64, N>,
-    Prior: Clone,
     [(); N + 1]:,
 {
     fn stat_p1(&self) -> impl Fn(Point) -> SVector<f64, { N + 1 }> + '_ {
@@ -115,7 +110,6 @@ impl<Point, Stat, Prior: Distribution<Point>, const N: usize> ipopt::BasicProble
 where
     Point: Copy + Clone,
     Stat: Fn(Point) -> SVector<f64, N>,
-    Prior: Clone,
     [(); N + 1]:,
 {
     fn num_variables(&self) -> usize {
@@ -138,7 +132,7 @@ where
     fn objective(&self, x: &[ipopt::Number], obj: &mut ipopt::Number) -> bool {
         let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
         multipliers.copy_from_slice(x);
-        let exp = Exponential::new(multipliers, self.stat_p1(), self.prior.clone());
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.prior);
 
         *obj = exp.entropy(10_000, &mut thread_rng());
         true
@@ -147,9 +141,77 @@ where
     fn objective_grad(&self, x: &[ipopt::Number], grad_f: &mut [ipopt::Number]) -> bool {
         let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
         multipliers.copy_from_slice(x);
-        let exp = Exponential::new(multipliers, self.stat_p1(), self.prior.clone());
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.prior);
 
         grad_f.copy_from_slice(exp.entropy_gradient(10_000, &mut thread_rng()).as_slice());
         true
+    }
+}
+
+impl<Point, Stat, Prior: Distribution<Point>, const N: usize> ipopt::ConstrainedProblem
+    for Problem<Point, Stat, Prior, N>
+where
+    Point: Copy + Clone,
+    Stat: Fn(Point) -> SVector<f64, N>,
+    [(); N + 1]:,
+{
+    fn num_constraints(&self) -> usize {
+        N
+    }
+
+    fn num_constraint_jacobian_non_zeros(&self) -> usize {
+        todo!()
+    }
+
+    fn constraint(&self, x: &[ipopt::Number], g: &mut [ipopt::Number]) -> bool {
+        let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
+        multipliers.copy_from_slice(x);
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.prior);
+
+        g.copy_from_slice(
+            exp.integral(&self.stat, 10_000, &mut thread_rng())
+                .as_slice(),
+        );
+        true
+    }
+
+    fn constraint_bounds(&self, g_l: &mut [ipopt::Number], g_u: &mut [ipopt::Number]) -> bool {
+        g_l.copy_from_slice(self.g_l.as_slice());
+        g_u.copy_from_slice(self.g_u.as_slice());
+        true
+    }
+
+    fn constraint_jacobian_indices(
+        &self,
+        _rows: &mut [ipopt::Index],
+        _cols: &mut [ipopt::Index],
+    ) -> bool {
+        todo!()
+    }
+
+    fn constraint_jacobian_values(
+        &self,
+        _x: &[ipopt::Number],
+        _vals: &mut [ipopt::Number],
+    ) -> bool {
+        todo!()
+    }
+
+    fn num_hessian_non_zeros(&self) -> usize {
+        (N + 1) * (N + 1)
+    }
+
+    fn hessian_indices(&self, _rows: &mut [ipopt::Index], _cols: &mut [ipopt::Index]) -> bool {
+        todo!()
+    }
+
+    fn hessian_values(
+        &self,
+        _x: &[ipopt::Number],
+        _obj_factor: ipopt::Number,
+        _lambda: &[ipopt::Number],
+        _vals: &mut [ipopt::Number],
+    ) -> bool {
+        todo!()
     }
 }
