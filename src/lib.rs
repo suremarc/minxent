@@ -136,13 +136,8 @@ where
         N + 1
     }
 
-    fn bounds(&self, x_l: &mut [ipopt::Number], x_u: &mut [ipopt::Number]) -> bool {
-        x_l[0..N].fill(-f64::INFINITY);
-        x_u[0..N].fill(f64::INFINITY);
-        x_l[N] = 1.;
-        x_u[N] = 1.;
-
-        true
+    fn bounds(&self, _x_l: &mut [ipopt::Number], _x_u: &mut [ipopt::Number]) -> bool {
+        false
     }
 
     fn initial_point(&self, _x: &mut [ipopt::Number]) -> bool {
@@ -174,11 +169,11 @@ where
     [(); N + 1]:,
 {
     fn num_constraints(&self) -> usize {
-        N
+        N + 1
     }
 
     fn num_constraint_jacobian_non_zeros(&self) -> usize {
-        todo!()
+        (N + 1) * (N + 1)
     }
 
     fn constraint(&self, x: &[ipopt::Number], g: &mut [ipopt::Number]) -> bool {
@@ -187,7 +182,7 @@ where
         let exp = Exponential::new(multipliers, self.stat_p1(), &self.space);
 
         g.copy_from_slice(
-            exp.integral(&self.stat, 10_000, &mut thread_rng())
+            exp.integral(self.stat_p1(), 10_000, &mut thread_rng())
                 .as_slice(),
         );
         true
@@ -195,41 +190,80 @@ where
 
     fn constraint_bounds(&self, g_l: &mut [ipopt::Number], g_u: &mut [ipopt::Number]) -> bool {
         g_l.copy_from_slice(self.g_l.as_slice());
+        g_l[N] = 1.;
         g_u.copy_from_slice(self.g_u.as_slice());
+        g_u[N] = 1.;
         true
     }
 
     fn constraint_jacobian_indices(
         &self,
-        _rows: &mut [ipopt::Index],
-        _cols: &mut [ipopt::Index],
+        rows: &mut [ipopt::Index],
+        cols: &mut [ipopt::Index],
     ) -> bool {
-        todo!()
+        for idx in 0usize..(N + 1) * (N + 1) {
+            (rows[idx], cols[idx]) = ((idx % N) as i32, (idx / N) as i32);
+        }
+        true
     }
 
-    fn constraint_jacobian_values(
-        &self,
-        _x: &[ipopt::Number],
-        _vals: &mut [ipopt::Number],
-    ) -> bool {
-        todo!()
+    fn constraint_jacobian_values(&self, x: &[ipopt::Number], vals: &mut [ipopt::Number]) -> bool {
+        let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
+        multipliers.copy_from_slice(x);
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.space);
+
+        vals.copy_from_slice(
+            exp.integral(
+                |x| {
+                    let stat = (exp.stat)(x);
+                    stat * stat.transpose()
+                },
+                10_000,
+                &mut thread_rng(),
+            )
+            .as_slice(),
+        );
+        true
     }
 
     fn num_hessian_non_zeros(&self) -> usize {
         (N + 1) * (N + 1)
     }
 
-    fn hessian_indices(&self, _rows: &mut [ipopt::Index], _cols: &mut [ipopt::Index]) -> bool {
-        todo!()
+    fn hessian_indices(&self, rows: &mut [ipopt::Index], cols: &mut [ipopt::Index]) -> bool {
+        for idx in 0usize..(N + 1) * (N + 1) {
+            (rows[idx], cols[idx]) = ((idx % N) as i32, (idx / N) as i32);
+        }
+        true
     }
 
     fn hessian_values(
         &self,
-        _x: &[ipopt::Number],
-        _obj_factor: ipopt::Number,
-        _lambda: &[ipopt::Number],
-        _vals: &mut [ipopt::Number],
+        x: &[ipopt::Number],
+        obj_factor: ipopt::Number,
+        lambda: &[ipopt::Number],
+        vals: &mut [ipopt::Number],
     ) -> bool {
-        todo!()
+        let mut multipliers: SVector<f64, { N + 1 }> = SVector::zeros();
+        multipliers.copy_from_slice(x);
+        let exp = Exponential::new(multipliers, self.stat_p1(), &self.space);
+
+        let mut lambdas: SVector<f64, { N + 1 }> = SVector::zeros();
+        lambdas.copy_from_slice(lambda);
+
+        vals.copy_from_slice(
+            exp.integral(
+                |x| {
+                    let stat = (exp.stat)(x);
+                    ((lambdas - obj_factor * multipliers).dot(&stat) - 2. * obj_factor)
+                        * stat
+                        * stat.transpose()
+                },
+                10_000,
+                &mut thread_rng(),
+            )
+            .as_slice(),
+        );
+        true
     }
 }
